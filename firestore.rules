@@ -1,0 +1,107 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required) - The unique user ID.
+    //   - email: string (required) - The user's email address.
+    //   - displayName: string (optional) - The user's display name.
+    //   - assessedLevel: string (optional) - The user's assessed English level.
+    //   - createdAt: string (required) - When the user profile was created.
+    //
+    // Collection: users/{userId}/messages
+    // Document ID: {messageId}
+    // Fields:
+    //   - role: string (required) - The role of the message sender ('user', 'model', 'system').
+    //   - content: string (required) - The text content of the message.
+    //   - createdAt: string (required) - When the message was sent.
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid;
+    }
+    
+    function uidNotModified() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid;
+    }
+    
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+    
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Domain Validators
+    function isValidUser() {
+      let data = request.resource.data;
+      let allowedFields = ['uid', 'email', 'displayName', 'assessedLevel', 'createdAt'];
+      
+      return hasOnlyAllowedFields(allowedFields) &&
+             hasRequiredFields(['uid', 'email', 'createdAt']) &&
+             data.uid is string && data.uid.size() > 0 && data.uid.size() < 100 &&
+             data.email is string && isValidEmail(data.email) && data.email.size() < 200 &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
+             (!('assessedLevel' in data) || (data.assessedLevel in ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'Pending'])) &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidMessage() {
+      let data = request.resource.data;
+      let allowedFields = ['role', 'content', 'createdAt'];
+      
+      return hasOnlyAllowedFields(allowedFields) &&
+             hasRequiredFields(['role', 'content', 'createdAt']) &&
+             data.role in ['user', 'model', 'system'] &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 10000 &&
+             isValidDateString(data.createdAt);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser() && uidUnchanged();
+      allow update: if isOwner(userId) && isValidUser() && uidNotModified() && 
+                    request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false; // Users cannot delete their profile directly
+      
+      match /messages/{messageId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidMessage();
+        allow update: if false; // Messages are immutable
+        allow delete: if false; // Messages cannot be deleted
+      }
+    }
+  }
+}

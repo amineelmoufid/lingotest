@@ -1,0 +1,5 @@
+{
+  "name": "English Level Assessor",
+  "description": "A chatbot that tests your English level and provides a CEFR assessment.",
+  "requestFramePermissions": []
+}
